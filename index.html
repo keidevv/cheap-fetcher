@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>File Fetcher</title>
+<style>
+    body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: #0f0f10;
+        color: #fff;
+        max-width: 900px;
+        padding: 20px;
+        margin: auto;
+    }
+    textarea {
+        width: 100%;
+        height: 140px;
+        background: #1a1a1d;
+        border: 1px solid #333;
+        color: #fff;
+        padding: 10px;
+        border-radius: 8px;
+    }
+    button {
+        width: 100%;
+        padding: 14px;
+        margin-top: 10px;
+        background: #5865f2;
+        border: none;
+        border-radius: 8px;
+        color: #fff;
+        font-size: 16px;
+        cursor: pointer;
+    }
+    button:hover {
+        background: #4752c4;
+    }
+    .error {
+        color: #ff4d4d;
+        margin-top: 10px;
+    }
+</style>
+</head>
+<body>
+
+<h2>File Fetcher</h2>
+<textarea id="input" placeholder="Paste URLs"></textarea>
+<button id="fetch-btn">Download</button>
+<div id="output"></div>
+
+<script>
+function parseURLs(text){
+    return text
+        .split(/[\s,]+/)
+        .filter(u => u.startsWith("https") &&
+                     (u.endsWith(".css") || u.endsWith(".js")));
+}
+
+document.getElementById("fetch-btn").addEventListener("click", async () => {
+    const urls = parseURLs(document.getElementById("input").value);
+    const output = document.getElementById("output");
+    output.innerHTML = "";
+
+    if(urls.length === 0){
+        output.innerHTML = "<div class='error'>No valid URLs found</div>";
+        return;
+    }
+
+    for(const url of urls){
+        try {
+            const res = await fetch(`/.netlify/functions/fetch-files?url=${encodeURIComponent(url)}`);
+            if(!res.ok){
+                output.innerHTML += `<div class='error'>${url}: Request failed (${res.status})</div>`;
+                continue;
+            }
+
+            const data = await res.json();
+
+            if(data.error){
+                output.innerHTML += `<div class='error'>${url}: ${data.error}</div>`;
+                continue;
+            }
+
+            const blob = new Blob([data.content]);
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = data.filename;
+            a.click();
+
+        } catch (e){
+            output.innerHTML += `<div class='error'>${url}: Network error</div>`;
+        }
+    }
+});
+</script>
+
+</body>
+</html>
