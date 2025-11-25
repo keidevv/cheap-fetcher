@@ -15,7 +15,7 @@
     }
     textarea {
         width: 100%;
-        height: 140px;
+        height: 180px;
         background: #1a1a1d;
         border: 1px solid #333;
         color: #fff;
@@ -36,9 +36,50 @@
     button:hover {
         background: #4752c4;
     }
+    #modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.7);
+        display: none;
+        justify-content: center;
+        align-items: center;
+    }
+    #modal-box {
+        background: #1a1a1d;
+        padding: 20px;
+        border-radius: 10px;
+        width: 300px;
+    }
+    select {
+        width: 100%;
+        padding: 10px;
+        border-radius: 6px;
+        background: #222;
+        color: #fff;
+        border: 1px solid #333;
+    }
+    #progress {
+        width: 100%;
+        background: #222;
+        height: 10px;
+        border-radius: 5px;
+        margin-top: 15px;
+        overflow: hidden;
+        display: none;
+    }
+    #bar {
+        height: 10px;
+        background: #5865f2;
+        width: 0%;
+    }
     .error {
         color: #ff4d4d;
         margin-top: 10px;
+    }
+    #stats {
+        margin-top: 8px;
+        opacity: 0.85;
+        font-size: 14px;
     }
 </style>
 </head>
@@ -47,52 +88,136 @@
 <h2>File Fetcher</h2>
 <textarea id="input" placeholder="Paste URLs"></textarea>
 <button id="fetch-btn">Download</button>
+<div id="progress"><div id="bar"></div></div>
+<div id="stats"></div>
 <div id="output"></div>
+
+<div id="modal">
+    <div id="modal-box">
+        <p>Select download type:</p>
+        <select id="mode">
+            <option value="zip">Complete ZIP</option>
+            <option value="single">Single File</option>
+        </select>
+        <button id="continue">Continue</button>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
 <script>
 function parseURLs(text){
     return text
-        .split(/[\s,]+/)
-        .filter(u => u.startsWith("https") &&
-                     (u.endsWith(".css") || u.endsWith(".js")));
+        .split(/\r?\n/)
+        .map(l => l.trim())
+        .filter(l => /^https?:\/\/.+\.(css|js)$/.test(l));
 }
 
-document.getElementById("fetch-btn").addEventListener("click", async () => {
+document.getElementById("fetch-btn").addEventListener("click", () => {
     const urls = parseURLs(document.getElementById("input").value);
-    const output = document.getElementById("output");
-    output.innerHTML = "";
-
     if(urls.length === 0){
-        output.innerHTML = "<div class='error'>No valid URLs found</div>";
+        document.getElementById("output").innerHTML =
+        "<div class='error'>No valid URLs found</div>";
         return;
     }
 
+    if(urls.length === 1){
+        fetchAndProcess(urls, "single");
+        return;
+    }
+
+    document.getElementById("modal").style.display = "flex";
+});
+
+document.getElementById("continue").addEventListener("click", () => {
+    document.getElementById("modal").style.display = "none";
+    const mode = document.getElementById("mode").value;
+    const urls = parseURLs(document.getElementById("input").value);
+    fetchAndProcess(urls, mode);
+});
+
+function formatETA(sec){
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    return `${h.toString().padStart(2,"0")}:${m.toString().padStart(2,"0")}:${s.toString().padStart(2,"0")}`;
+}
+
+async function fetchAndProcess(urls, mode){
+    const output = document.getElementById("output");
+    output.innerHTML = "";
+    document.getElementById("progress").style.display = "block";
+    document.getElementById("stats").textContent = "";
+
+    let completed = 0;
+    const total = urls.length;
+    let combined = "";
+    const files = [];
+
+    const startTime = performance.now();
+
     for(const url of urls){
+        const itemStart = performance.now();
+
         try {
             const res = await fetch(`/.netlify/functions/fetch-files?url=${encodeURIComponent(url)}`);
-            if(!res.ok){
-                output.innerHTML += `<div class='error'>${url}: Request failed (${res.status})</div>`;
-                continue;
-            }
-
             const data = await res.json();
 
             if(data.error){
                 output.innerHTML += `<div class='error'>${url}: ${data.error}</div>`;
-                continue;
+            } else {
+                if(mode === "single"){
+                    combined += `• ${data.filename}\n${data.content}\n\n`;
+                } else {
+                    files.push({name: data.filename, content: data.content});
+                }
             }
-
-            const blob = new Blob([data.content]);
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = data.filename;
-            a.click();
-
-        } catch (e){
+        } catch(e){
             output.innerHTML += `<div class='error'>${url}: Network error</div>`;
         }
+
+        completed++;
+
+        const elapsed = (performance.now() - startTime) / 1000;
+        const avg = elapsed / completed;
+        const remaining = avg * (total - completed);
+        const speed = completed / elapsed;
+
+        document.getElementById("stats").textContent =
+            `Progress: ${completed}/${total}  •  ETA: ${formatETA(remaining)}  •  ${speed.toFixed(2)} files/sec`;
+
+        document.getElementById("bar").style.width =
+            Math.round((completed/total)*100) + "%";
+
+        await new Promise(r => setTimeout(r, 5)); 
     }
-});
+
+    if(mode === "single"){
+        downloadFile("combined.txt", combined);
+    } else {
+        downloadZip(files);
+    }
+
+    document.getElementById("stats").textContent =
+        `Completed ${total} files in ${formatETA((performance.now()-startTime)/1000)}`;
+}
+
+function downloadFile(name, content){
+    const blob = new Blob([content]);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+}
+
+async function downloadZip(files){
+    const zip = new JSZip();
+    for(const f of files){
+        zip.file(f.name, f.content);
+    }
+    const blob = await zip.generateAsync({type:"blob"});
+    downloadFile("files.zip", blob);
+}
 </script>
 
 </body>
